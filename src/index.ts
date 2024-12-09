@@ -12,6 +12,7 @@ import { getFullnodeUrl, SuiClient } from '@mysten/sui.js/client';
 import { getFaucetHost, requestSuiFromFaucetV0 } from '@mysten/sui.js/faucet';
 import { bytesToHex } from '@noble/hashes/utils'
 import { SUI_ADDRESS_LENGTH, normalizeSuiAddress } from '@mysten/sui.js/utils'
+import { IntentScope, messageWithIntent } from '@mysten/sui.js/cryptography'
 
 function clearOutput() {
   document.getElementById('output')!.innerText = ''
@@ -38,7 +39,7 @@ class Store {
   supportsLargeBlob?: boolean
   address?: string
   txBytes?: Uint8Array
-  client = new SuiClient({ url: getFullnodeUrl('localnet') });
+  client = new SuiClient({ url: getFullnodeUrl('devnet') });
 
   ecdsaRecovery: {
     credentialId?: Uint8Array
@@ -171,15 +172,15 @@ async function createTxHandler() {
 	const tx = new TransactionBlock();
 
   await requestSuiFromFaucetV0({
-    host: getFaucetHost('localnet'),
+    host: getFaucetHost('devnet'),
     recipient: address,
   });
   let coins = await store.client.getCoins({
     owner: address,
     coinType: "0x2::sui::SUI",
   });
-  const coin = coins.data[3];
-
+  const coin = coins.data[0];
+  console.log('coin', coin);
 	tx.setSender(address);
 	tx.setGasPrice(1000);
 	tx.setGasBudget(2000000);
@@ -201,15 +202,12 @@ async function createTxHandler() {
 
 async function signHandler() {
   clearOutput()
-
-  const digest = blake2b(store.txBytes!, { dkLen: 32 });
-  let extended = new Uint8Array(35);
-  extended.set([0, 0, 0]);
-  extended.set(digest, 3);
+  const intentMessage = messageWithIntent(IntentScope.TransactionData, store.txBytes!);
+  const digest = blake2b(intentMessage, { dkLen: 32 });
 
   const credential = (await navigator.credentials.get({
     publicKey: {
-      challenge: extended,
+      challenge: digest,
       // allowCredentials, // optional
       userVerification: 'discouraged',
     },
@@ -218,7 +216,7 @@ async function signHandler() {
   const encoded = encodeWebAuthnSignature(store.pubkey!, credential.response)
   const decoded = decodeWebAuthnSignature(encoded)
 
-  const result = verifyEncodedSignature(extended, encoded)
+  const result = verifyEncodedSignature(digest, encoded)
   console.log('result', result)
   const onchainResult = await store.client.executeTransactionBlock({
 	transactionBlock: toB64(store.txBytes!),
@@ -233,7 +231,7 @@ async function signHandler() {
     `pubkey (hex): ${toHEX(store.pubkey!)}`,
     `sui address: ${store.address}`,
     `tx bytes: ${toB64(store.txBytes!)}`,
-    `tx digest (hex): ${toHEX(extended)}`,
+    `tx digest (hex): ${toHEX(digest)}`,
     `authenticatorData (hex): ${toHEX(decoded.authenticatorData)}`,
     `clientDataJSON: \`${decoded.clientDataJson}\``,
     `r1 signature (hex): ${toHEX(decoded.userSignature)}`,
